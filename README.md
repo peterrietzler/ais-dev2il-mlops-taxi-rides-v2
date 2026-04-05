@@ -49,3 +49,12 @@ export MLFLOW_TRACKING_URI=https://dagshub.com/peter.rietzler.privat/ais-dev2il-
 export MLFLOW_TRACKING_USERNAME=peter.rietzler.privat
 export MLFLOW_TRACKING_PASSWORD=
 uv run outlier_detector_training.py random_forest
+
+
+# Workflow
+
+New features: matrix
+
+# TODOs
+
+Training takes too long. Reduce the dataset for the training to make it faster.

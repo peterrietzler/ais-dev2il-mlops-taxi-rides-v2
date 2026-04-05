@@ -3,6 +3,10 @@ name: Train Models
 on:
   push:
     branches: [main]
+    paths:
+      - "data/**"
+      - "uv.lock"
+      - "outlier_detector_training.py"
   workflow_dispatch:
 
 jobs:
