@@ -20,18 +20,14 @@ logger = logging.getLogger(__name__)
 
 REQUIRED_ENV_VARS = ["MLFLOW_TRACKING_URI", "MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD"]
 
-
 def check_env_vars() -> None:
   missing = [var for var in REQUIRED_ENV_VARS if not os.environ.get(var)]
   if missing:
     logger.error(f"Missing required environment variables: {', '.join(missing)}")
     sys.exit(1)
 
-
 def train_model(model_type: str):
-  data_file = "data/taxi-rides-training-data.parquet"
-  logger.info(f"Processing taxi ride data from: {data_file}")
-  data = pandas.read_parquet(data_file)
+  check_env_vars()
 
   logger.info("Training outlier detection classifier")
 
@@ -44,11 +40,11 @@ def train_model(model_type: str):
   mlflow.autolog()
   with mlflow.start_run():
     if model_type == 'random_forest':
-      model, metadata = train_random_forest_classifier(data)
+      model, metadata = train_random_forest_classifier()
     elif model_type == 'random_forest_v2':
-      model, metadata = train_random_forest_classifier_v2(data)
+      model, metadata = train_random_forest_classifier_v2()
     elif model_type == 'logistic_regression':
-      model, metadata = train_logistic_regression_classifier(data)
+      model, metadata = train_logistic_regression_classifier()
     # log some custom metrics
     for false_key, false_value in metadata["False"].items():
       mlflow.log_metric(f"False_{false_key}", false_value)
@@ -71,13 +67,14 @@ def train_model(model_type: str):
     mlflow.log_artifact(metadata_output_file)
 
 
-def train_random_forest_classifier(labeled_taxi_rides_data: pd.DataFrame) -> \
-    tuple[RandomForestClassifier, dict]:
-  # Features and target
-  X = labeled_taxi_rides_data[['ride_time', 'trip_distance']]
-  y = labeled_taxi_rides_data['outlier']
+DATA_FILE = "data/taxi-rides-training-data.parquet"
 
-  # Split data for training and testing
+
+def train_random_forest_classifier() -> tuple[RandomForestClassifier, dict]:
+  data = pandas.read_parquet(DATA_FILE)
+  X = data[['ride_time', 'trip_distance']]
+  y = data['outlier']
+
   # As the dataset is imbalanced, stratify=y will ensure that the split maintains the proportion of classes
   X_train, X_test, y_train, y_test = train_test_split(
       X, y, test_size=0.2, random_state=42, stratify=y
@@ -87,20 +84,17 @@ def train_random_forest_classifier(labeled_taxi_rides_data: pd.DataFrame) -> \
   clf = RandomForestClassifier(class_weight='balanced', random_state=42)
   clf.fit(X_train, y_train)
 
-  # Predict on test set
   y_pred = clf.predict(X_test)
   report = classification_report(y_test, y_pred, digits=4, output_dict=True)
 
   return (clf, report)
 
 
-def train_random_forest_classifier_v2(labeled_taxi_rides_data: pd.DataFrame) -> \
-    tuple[RandomForestClassifier, dict]:
-  # Features and target
-  X = labeled_taxi_rides_data[['ride_time', 'trip_distance']]
-  y = labeled_taxi_rides_data['outlier']
+def train_random_forest_classifier_v2() -> tuple[RandomForestClassifier, dict]:
+  data = pandas.read_parquet(DATA_FILE)
+  X = data[['ride_time', 'trip_distance']]
+  y = data['outlier']
 
-  # Split data for training and testing
   # As the dataset is imbalanced, stratify=y will ensure that the split maintains the proportion of classes
   X_train, X_test, y_train, y_test = train_test_split(
       X, y, test_size=0.2, random_state=42, stratify=y
@@ -113,20 +107,17 @@ def train_random_forest_classifier_v2(labeled_taxi_rides_data: pd.DataFrame) -> 
   ])
   clf.fit(X_train, y_train)
 
-  # Predict on test set
   y_pred = clf.predict(X_test)
   report = classification_report(y_test, y_pred, digits=4, output_dict=True)
 
   return (clf, report)
 
 
-def train_logistic_regression_classifier(
-    labeled_taxi_rides_data: pd.DataFrame) -> tuple[LogisticRegression, dict]:
-  # Features and target
-  X = labeled_taxi_rides_data[['ride_time', 'trip_distance']]
-  y = labeled_taxi_rides_data['outlier']
+def train_logistic_regression_classifier() -> tuple[LogisticRegression, dict]:
+  data = pandas.read_parquet(DATA_FILE)
+  X = data[['ride_time', 'trip_distance']]
+  y = data['outlier']
 
-  # Split data for training and testing
   X_train, X_test, y_train, y_test = train_test_split(
       X, y, test_size=0.2, random_state=42, stratify=y
   )
@@ -177,9 +168,7 @@ def detect_outliers(taxi_rides_data: pd.DataFrame, model) -> pd.DataFrame:
   # Return only the rows classified as outliers
   return data[data['outlier'] == 1]
 
-
 if __name__ == "__main__":
-  check_env_vars()
   model_type = sys.argv[1]  # random_forest, random_forest_v2, logistic_regression
   train_model(model_type)
 

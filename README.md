@@ -60,4 +60,15 @@ New features: matrix
 
 Training takes too long. Reduce the dataset for the training to make it faster.
 
+DVC
 
+Training
+- Start with a skeleton that contains the training code 
+- Show how to store the model file by pickling it
+- Introduce MLFlow for training (incl. env variables etc.)
+
+Introduce Training Pipeline
+
+Rename all files to simple names to type
+
+Introduce the API Pipeline
