@@ -1,5 +1,0 @@
-outs:
-- md5: fbff0cf4ffecff557f9ea8aabb74838f
-  size: 1590104
-  hash: md5
-  path: 2025-01-18.taxi-rides.parquet
