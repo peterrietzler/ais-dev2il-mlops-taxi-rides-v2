@@ -1184,3 +1184,214 @@ on:
 Commit and push this change. Now try pushing a small README edit — the workflow should **not** trigger. Then push a change to `outlier_detector_training.py` — it should trigger.
 
 💡 `workflow_dispatch` always works regardless of path filters. So you can still trigger manually whenever you need to.
+
+---
+
+## 🐳 Exercise 7: Package and Ship the API
+
+You can run the API on your machine with `uv run fastapi dev`. But how do you ship it somewhere else — a server, a teammate's machine, a cloud environment? 
+You can't just send your laptop. Docker is the answer. You already know how to build images. Let's package this API.
+
+### Block 1: The Dockerfile
+
+Create a file called `Dockerfile` in the root of your repository and paste in the following:
+
+```dockerfile
+ARG PYTHON_VERSION=3.13
+
+# Builder stage: Install dependencies
+FROM python:${PYTHON_VERSION}-slim AS builder
+
+WORKDIR /app
+
+# Install curl for uv
+RUN apt-get update && apt-get install -y curl
+
+# Install uv
+RUN curl -Ls https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
+
+# Copy project files needed for dependency installation
+COPY pyproject.toml uv.lock .python-version ./
+
+# Install dependencies (creates .venv with Python and packages)
+RUN uv sync --frozen
+
+# Runtime stage: Clean image with only runtime dependencies
+FROM python:${PYTHON_VERSION}-slim
+
+WORKDIR /app
+
+# Copy Python environment and application from builder
+COPY --from=builder /app/.venv /app/.venv
+
+# Copy application code
+COPY outlier_detection_api.py ./
+COPY outlier_detection_model.pkl ./
+
+# Set the entrypoint
+ENTRYPOINT ["/app/.venv/bin/fastapi", "run", "outlier_detection_api.py"]
+```
+
+This uses the same multi-stage builder pattern you already know from the Docker exercises — nothing new there.
+
+The one line to pay attention to:
+
+```dockerfile
+COPY outlier_detection_model.pkl ./
+```
+
+The trained model file gets **baked into the image**. The resulting image is completely self-contained — it needs no 
+MLflow connection, no download script, no environment variables at runtime. Everything needed to serve predictions is inside the image.
+
+This means you must have `outlier_detection_model.pkl` on disk **before** you run `docker build`. Run `download_model.py` first if you haven't already.
+
+**Build the image:**
+
+```bash
+docker build -t outlier-detection-api .
+```
+
+**Run it locally:**
+
+```bash
+docker run --rm -p 8000:8000 outlier-detection-api
+```
+
+Open `http://127.0.0.1:8000/docs` and try a prediction. Same API, now running inside a container.
+
+### Block 2: The CI Pipeline
+
+Doing this manually every time `.model-version` changes gets old fast. Let's automate it.
+
+Create `.github/workflows/api.yml` and paste in the following:
+
+```yaml
+name: Build Outlier Detection API Server
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+
+    env:
+      MLFLOW_TRACKING_URI: ${{ vars.MLFLOW_TRACKING_URI }}
+      MLFLOW_TRACKING_USERNAME: ${{ vars.MLFLOW_TRACKING_USERNAME }}
+      MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Download model from MLflow registry
+        run: uv run download_model.py
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read Python version
+        id: python-version
+        run: echo "version=$(cat .python-version)" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:v${{ github.run_number }}
+          build-args: |
+            PYTHON_VERSION=${{ steps.python-version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+```
+
+The key thing to notice is the **step order**:
+
+1. `download_model.py` runs first — this fetches `outlier_detection_model.pkl` from the MLflow registry onto the CI runner
+2. `docker build` runs after — this bakes the `.pkl` file into the image
+
+It's exactly the same sequence you just did manually. CI just does it automatically on every push.
+
+The image gets two tags:
+- `latest` — always points to the most recent build
+- `v<run_number>` — a pinned, traceable version (e.g. `v42`) you can always roll back to
+
+**Trigger the pipeline:**
+
+Commit and push your `api.yml`. Watch the workflow run. When it completes, go to your repository on 
+GitHub check if the package is there.
+
+### 🚀 Level Up
+
+#### Challenge 1: Run the Ship 🚢
+
+Pull the image that CI just built and run it on your local machine:
+
+```bash
+docker pull ghcr.io/<YOUR_GITHUB_USERNAME>/<YOUR_REPO_NAME>:latest
+docker run --rm -p 8000:8000 ghcr.io/<YOUR_GITHUB_USERNAME>/<YOUR_REPO_NAME>:latest
+```
+
+❓Having "Platform" issues ("no matching manifest ..." errors). Remember this [section](https://github.com/peterrietzler/ais-dev2il-ais-power-smoothie-delivery-box#-troubleshooting-platform-compatibility-issues) 
+from our last sessions.
+
+Open `http://127.0.0.1:8000/docs`. You're now running the exact image that CI built — not a local build, not a dev server. The real thing.
+
+#### Challenge 2: Only Ship When It Matters 🎯
+
+Right now the pipeline rebuilds the Docker image on every push to `main`. That's wasteful — a README change shouldn't trigger a Docker build.
+
+Add a `paths:` filter so the pipeline only runs when something actually affecting the image changes:
+
+```yaml
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".model-version"
+      - "Dockerfile"
+      - "outlier_detection_api.py"
+      - "pyproject.toml"
+      - "uv.lock"
+  workflow_dispatch:
+```
+
+Push a README change and confirm the pipeline does **not** trigger. Then bump `.model-version` and confirm it **does**.
+
+#### Challenge 3: Image Detective 🔍
+
+Confirm the model file is actually inside the image:
+
+```bash
+docker run -it --entrypoint sh --rm ghcr.io/<YOUR_GITHUB_USERNAME>/<YOUR_REPO_NAME>:latest
+```
+
+When you list the files in the current working directory, you should see `outlier_detection_model.pkl` 
+listed alongside `outlier_detection_api.py`. The model is in the box. 
